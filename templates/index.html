@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <title>The World Of Pineapple</title>
+  <style>
+    body { font-family: 'Prompt', sans-serif; text-align: center; background: #fffde7; margin:0; padding:0; }
+    h1 { margin: 20px 0 10px; letter-spacing:1px; }
+    #video_feed_element { border-radius: 12px; border: 4px solid #ffb300; width: 640px; height: 480px; box-shadow:0 4px 16px rgba(0,0,0,0.25); }
+    #overview_result, #details_result { width: clamp(320px, 90%, 900px); margin: 40px auto 0; text-align:left; }
+    .panel { background:#ffffff; border:1px solid #ffe082; border-radius:14px; padding:24px 28px 30px; position:relative; box-shadow:0 8px 24px -6px rgba(255,171,64,0.35); overflow:hidden; }
+    .panel:before { content:""; position:absolute; inset:0; background:linear-gradient(135deg,rgba(255,235,59,0.18),rgba(255,171,64,0.15)); pointer-events:none; }
+    .panel h2 { margin-top:0; font-size:26px; display:flex; align-items:center; gap:10px; }
+    .stat-grid { display:grid; gap:18px; grid-template-columns: repeat(auto-fit,minmax(140px,1fr)); margin-top:18px; }
+    .stat-box { background:#fff8e1; border:1px solid #ffecb3; border-radius:12px; padding:14px 12px; position:relative; transition:transform .25s; }
+    .stat-box:hover { transform:translateY(-4px); }
+    .stat-box .label { font-size:13px; text-transform:uppercase; letter-spacing:.5px; color:#ff9100; font-weight:600; }
+    .stat-box .value { font-size:26px; font-weight:700; color:#4e342e; line-height:1.15; margin-top:6px; }
+    .group-heading { margin:34px 0 10px; font-size:18px; color:#6d4c41; display:flex; align-items:center; gap:8px; }
+    .tag-list { display:flex; flex-wrap:wrap; gap:10px; margin:8px 0 4px; }
+    .tag { background:#ffe0b2; border:1px solid #ffcc80; padding:6px 10px 6px 12px; border-radius:999px; font-size:14px; font-weight:600; color:#5d4037; position:relative; }
+    .tag .count { background:#ffab40; color:#fff; font-size:12px; padding:2px 8px; border-radius:10px; margin-left:8px; box-shadow:0 2px 4px rgba(0,0,0,0.15); }
+    .divider { height:1px; background:linear-gradient(to right, rgba(255,171,64,0.1), #ffcc80, rgba(255,171,64,0.1)); margin:30px 0 10px; border:none; }
+    table { width:100%; border-collapse:collapse; font-size:14px; background:#ffffff; border:1px solid #ffe082; box-shadow:0 4px 12px -4px rgba(0,0,0,0.15); }
+    th,td { padding:8px 10px; border:1px solid #ffe082; }
+    th { background:#ffecb3; position:sticky; top:0; z-index:2; }
+    tbody tr:nth-child(even){ background:#fffde7; }
+    .pine-deco { position:absolute; bottom:10px; right:10px; width:120px; opacity:0.9; z-index:1; }
+    .footer-note { margin:60px 0 40px; font-size:12px; color:#8d6e63; }
+    @media (max-width:760px){ #video_feed_element{ width:95%; height:auto; } .stat-grid{grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); } }
+  </style>
+</head>
+<body>
+  <img src="{{ url_for('static', filename='pineapple-cartoon-character-free-vector.jpg') }}" alt="pineapple mascot" class="pine-deco">
+
+  <h1>🍍🍍🍍 ตรวจคุณภาพสับปะรด 🍍🍍🍍</h1>
+  {% if is_deploy %}
+  <!-- Deploy mode: user camera -->
+  <div style="margin-top:10px;">
+    <video id="user_cam" autoplay playsinline muted style="width:640px;max-width:95%;border:4px solid #ffb300;border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,0.25);"></video>
+    <div id="status" style="margin-top:6px;font-size:12px;color:#5d4037;">Initializing camera...</div>
+  </div>
+  {% else %}
+  <!-- Local dev: server webcam stream -->
+  <img src="{{ url_for('video_feed') }}" id="video_feed_element">
+  {% endif %}
+  <div id="result"></div>
+  <div id="overview_result" class="panel"></div>
+  <div id="details_result" class="panel" style="margin-top:28px;"></div>
+  <div class="footer-note">Prototype realtime pineapple quality inspection dashboard</div>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>
