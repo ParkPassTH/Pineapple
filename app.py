@@ -8,10 +8,12 @@ from collections import defaultdict
 import os
 import threading
 import re
+import time
 
 app = Flask(__name__)
 IS_DEPLOY = os.getenv("DEPLOY") == "1"  # set DEPLOY=1 on Render to disable server webcam stream
 IMGSZ = int(os.getenv("IMGSZ", "416"))  # configurable inference size (smaller = faster)
+MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", str(IMGSZ)))  # hard cap for /predict images
 
 # Limit CPU threads to reduce memory spikes on small instances
 try:
@@ -152,6 +154,7 @@ def draw_results_multi_class(frame, detections, class_names, class_colors, curre
 # --- 2. ฟังก์ชันสำหรับสตรีมวิดีโอ (Generator) ---
 latest_summary_lock = threading.Lock()
 latest_summary = {"overview": {"total": 0, "grades": {}, "ripeness": {}, "defects": {}}, "details": []}
+INFER_LOCK = threading.Lock()  # prevent concurrent heavy inferences on small instances
 
 def build_frame_summary(detections, class_names):
     """สรุปผลแบบรวมกลุ่มผลไม้ต่อ 'ลูก' โดยไม่ใช้ tracker id แต่ใช้การซ้อนทับ/ระยะใกล้
@@ -443,21 +446,36 @@ def predict():
     except Exception as e:
         return jsonify({'error': f'Invalid image: {str(e)}'}), 400
 
-    # ประมวลผลด้วย YOLO
+    # Scale incoming image further if very large (defensive)
     try:
-        # ใช้ predict() ทั้งสองโหมด (ลดภาระ track) conf=0.5 ตามผู้ใช้ระบุ
-        # Resize server-side to IMGSZ maintaining aspect (safety if client didn't scale)
         h, w = frame.shape[:2]
         max_side = max(h, w)
-        if max_side > IMGSZ:
-            scale = IMGSZ / max_side
-            new_w, new_h = int(w*scale), int(h*scale)
+        if max_side > MAX_IMAGE_SIDE:
+            scale = MAX_IMAGE_SIDE / max_side
+            new_w, new_h = int(w * scale), int(h * scale)
             frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-        results = model.predict(frame, conf=0.5, iou=0.5, imgsz=IMGSZ, verbose=False)
-    except SystemExit:
-        return jsonify({'error': 'Model inference system exit (possibly OOM). Try smaller model.'}), 500
-    except Exception as e:
-        return jsonify({'error': f'Inference failed: {e}'}), 500
+    except Exception:
+        pass
+
+    # Prevent overlapping inferences (small CPU instance protection)
+    if not INFER_LOCK.acquire(blocking=False):
+        return jsonify({'error': 'Busy – skipping frame, try again shortly'}), 429
+
+    t0 = time.time()
+    try:
+        try:
+            # Use inference_mode to disable gradients
+            with torch.inference_mode():
+                results = model.predict(frame, conf=0.5, iou=0.5, imgsz=IMGSZ, verbose=False)
+        except SystemExit:
+            return jsonify({'error': 'Model inference system exit (possibly OOM). Try smaller model.'}), 500
+        except Exception as e:
+            return jsonify({'error': f'Inference failed: {e}'}), 500
+    finally:
+        infer_time = (time.time() - t0) * 1000
+        # Light logging (stdout) for Render logs
+        print(f"/predict infer_time_ms={infer_time:.1f}")
+        INFER_LOCK.release()
 
     detections = []
     if results and len(results):

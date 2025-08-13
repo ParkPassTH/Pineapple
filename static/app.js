@@ -1,4 +1,3 @@
-
 const overviewDiv = document.getElementById('overview_result');
 const detailsDiv = document.getElementById('details_result');
 const userCam = document.getElementById('user_cam');
@@ -77,18 +76,38 @@ if(userCam){
       canvas.width = userCam.videoWidth;
       canvas.height = userCam.videoHeight;
       const ctx = canvas.getContext('2d');
-      ctx.drawImage(userCam,0,0);
-      const dataURL = canvas.toDataURL('image/jpeg',0.7);
+      // downscale if very large to reduce upload size
+      const targetMax = 640;
+      let dw = userCam.videoWidth, dh = userCam.videoHeight;
+      if(Math.max(dw,dh) > targetMax){
+        const sc = targetMax / Math.max(dw,dh);
+        canvas.width = Math.round(dw*sc);
+        canvas.height = Math.round(dh*sc);
+      }
+      ctx.drawImage(userCam,0,0,canvas.width,canvas.height);
+      const dataURL = canvas.toDataURL('image/jpeg',0.5); // lower quality for bandwidth
       try{
         const res = await fetch('/predict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:dataURL})});
         if(res.ok){
           const json = await res.json();
           renderSummary(json);
           if(statusEl) statusEl.textContent = 'Updated '+new Date().toLocaleTimeString();
-        } else if(statusEl){ statusEl.textContent = 'Predict error '+res.status; }
-      }catch(e){ if(statusEl) statusEl.textContent = 'Network error '+e.message; }
+          sendFrame._delay = 1200; // normal cadence
+        } else {
+          if(res.status === 429){
+            if(statusEl) statusEl.textContent = 'Server busy, backing off';
+            sendFrame._delay = 2000; // backoff
+          } else {
+            if(statusEl) statusEl.textContent = 'Predict error '+res.status;
+            sendFrame._delay = 1500;
+          }
+        }
+      }catch(e){
+        if(statusEl) statusEl.textContent = 'Network error '+e.message;
+        sendFrame._delay = Math.min(4000, (sendFrame._delay||1500)*1.5);
+      }
     }
-    setTimeout(sendFrame, 1000);
+    setTimeout(sendFrame, sendFrame._delay || 1200);
   }
   initCam();
   sendFrame();
