@@ -3,6 +3,7 @@ from flask import Flask, render_template, Response, jsonify
 import cv2
 import numpy as np
 from ultralytics import YOLO
+import torch
 from collections import defaultdict
 import os
 import threading
@@ -10,6 +11,13 @@ import re
 
 app = Flask(__name__)
 IS_DEPLOY = os.getenv("DEPLOY") == "1"  # set DEPLOY=1 on Render to disable server webcam stream
+IMGSZ = int(os.getenv("IMGSZ", "416"))  # configurable inference size (smaller = faster)
+
+# Limit CPU threads to reduce memory spikes on small instances
+try:
+    torch.set_num_threads(int(os.getenv("TORCH_NUM_THREADS", "1")))
+except Exception:
+    pass
 # ตรวจสอบว่าไฟล์โมเดลมีอยู่จริง
 model_path = 'best.pt'
 if not os.path.exists(model_path):
@@ -23,14 +31,17 @@ if not class_names:
     exit()
 
 # Warmup in deploy mode to avoid first-request timeout (loads weights outside request lifecycle)
-if IS_DEPLOY:
+def _warmup_model():
     try:
-        import numpy as _np
-        _dummy = _np.zeros((320,320,3), dtype=_np.uint8)
-        model.predict(_dummy, imgsz=320, conf=0.5, verbose=False)
+        import numpy as _np  # local import to avoid overhead if not needed
+        dummy = _np.zeros((320, 320, 3), dtype=_np.uint8)
+        model.predict(dummy, imgsz=IMGSZ, conf=0.5, verbose=False)
         print("Model warmup complete")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 broad for startup logging only
         print("Warmup failed:", e)
+
+if IS_DEPLOY:
+    _warmup_model()
 
 TARGET_CLASS_IDS = {0, 1, 2, 3, 4, 5}
 np.random.seed(58)
@@ -296,8 +307,18 @@ def generate_frames():
         if not ret:
             break
 
-        # ประมวลผลเฟรมด้วยโมเดล YOLO (dev only uses tracking)
-        results = model.track(frame, persist=True, tracker="bytetrack.yaml", conf=0.5, iou=0.5) if not IS_DEPLOY else model.predict(frame, conf=0.5, iou=0.5, verbose=False)
+        # ประมวลผลเฟรมด้วยโมเดล YOLO (ใช้ track ใน local เพื่อเดโม, ใช้ predict ใน deploy เพื่อลดภาระ)
+        if not IS_DEPLOY:
+            results = model.track(frame, persist=True, tracker="bytetrack.yaml", conf=0.5, iou=0.5)
+        else:
+            # Resize for performance in deploy mode
+            h, w = frame.shape[:2]
+            max_side = max(h, w)
+            if max_side > IMGSZ:
+                scale = IMGSZ / max_side
+                new_w, new_h = int(w*scale), int(h*scale)
+                frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+            results = model.predict(frame, conf=0.5, iou=0.5, imgsz=IMGSZ, verbose=False)
 
         current_frame_counts = defaultdict(int)
         detections_to_draw = []
@@ -425,7 +446,14 @@ def predict():
     # ประมวลผลด้วย YOLO
     try:
         # ใช้ predict() ทั้งสองโหมด (ลดภาระ track) conf=0.5 ตามผู้ใช้ระบุ
-        results = model.predict(frame, conf=0.5, iou=0.5, verbose=False)
+        # Resize server-side to IMGSZ maintaining aspect (safety if client didn't scale)
+        h, w = frame.shape[:2]
+        max_side = max(h, w)
+        if max_side > IMGSZ:
+            scale = IMGSZ / max_side
+            new_w, new_h = int(w*scale), int(h*scale)
+            frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        results = model.predict(frame, conf=0.5, iou=0.5, imgsz=IMGSZ, verbose=False)
     except SystemExit:
         return jsonify({'error': 'Model inference system exit (possibly OOM). Try smaller model.'}), 500
     except Exception as e:
