@@ -22,6 +22,16 @@ if not class_names:
     print("Error: Could not retrieve class names from model.")
     exit()
 
+# Warmup in deploy mode to avoid first-request timeout (loads weights outside request lifecycle)
+if IS_DEPLOY:
+    try:
+        import numpy as _np
+        _dummy = _np.zeros((320,320,3), dtype=_np.uint8)
+        model.predict(_dummy, imgsz=320, conf=0.5, verbose=False)
+        print("Model warmup complete")
+    except Exception as e:
+        print("Warmup failed:", e)
+
 TARGET_CLASS_IDS = {0, 1, 2, 3, 4, 5}
 np.random.seed(58)
 class_colors = {
@@ -286,14 +296,14 @@ def generate_frames():
         if not ret:
             break
 
-        # ประมวลผลเฟรมด้วยโมเดล YOLO
-        results = model.track(frame, persist=True, tracker="bytetrack.yaml", conf=0.25, iou=0.5)
+        # ประมวลผลเฟรมด้วยโมเดล YOLO (dev only uses tracking)
+        results = model.track(frame, persist=True, tracker="bytetrack.yaml", conf=0.5, iou=0.5) if not IS_DEPLOY else model.predict(frame, conf=0.5, iou=0.5, verbose=False)
 
         current_frame_counts = defaultdict(int)
         detections_to_draw = []
 
         last_raw_detections.clear()
-        if results and results[0].boxes.id is not None:
+        if results and len(results):
             for det in results[0].boxes:
                 int_cls_id = int(det.cls[0])
                 class_name = class_names.get(int_cls_id, f"Unknown_{int_cls_id}")
@@ -413,9 +423,16 @@ def predict():
         return jsonify({'error': f'Invalid image: {str(e)}'}), 400
 
     # ประมวลผลด้วย YOLO
-    results = model.track(frame, persist=True, tracker="bytetrack.yaml", conf=0.4, iou=0.5)
+    try:
+        # ใช้ predict() ทั้งสองโหมด (ลดภาระ track) conf=0.5 ตามผู้ใช้ระบุ
+        results = model.predict(frame, conf=0.5, iou=0.5, verbose=False)
+    except SystemExit:
+        return jsonify({'error': 'Model inference system exit (possibly OOM). Try smaller model.'}), 500
+    except Exception as e:
+        return jsonify({'error': f'Inference failed: {e}'}), 500
+
     detections = []
-    if results and results[0].boxes.id is not None:
+    if results and len(results):
         for det in results[0].boxes:
             int_cls_id = int(det.cls[0])
             if not TARGET_CLASS_IDS or int_cls_id in TARGET_CLASS_IDS:
